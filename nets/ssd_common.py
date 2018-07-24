@@ -22,13 +22,14 @@ import tf_extended as tfe
 # =========================================================================== #
 # TensorFlow implementation of boxes SSD encoding / decoding.
 # =========================================================================== #
-def tf_ssd_bboxes_encode_layer(labels,
-                               bboxes,
-                               anchors_layer,
+# 为了有助理解，m表示该层中心点行列数，k为每个中心点对应的框数，n为图像上的目标数
+def tf_ssd_bboxes_encode_layer(labels,         # (n,)
+                               bboxes,         # (n, 4)
+                               anchors_layer,  # y(m, m, 1), x(m, m, 1), h(k,), w(k,)
                                num_classes,
                                no_annotation_label,
                                ignore_threshold=0.5,
-                               prior_scaling=[0.1, 0.1, 0.2, 0.2],
+                               prior_scaling=(0.1, 0.1, 0.2, 0.2),
                                dtype=tf.float32):
     """Encode groundtruth labels and bounding boxes using SSD anchors from
     one layer.
@@ -44,16 +45,17 @@ def tf_ssd_bboxes_encode_layer(labels,
       (target_labels, target_localizations, target_scores): Target Tensors.
     """
     # Anchors coordinates and volume.
-    yref, xref, href, wref = anchors_layer
-    ymin = yref - href / 2.
+    yref, xref, href, wref = anchors_layer  # y(m, m, 1), x(m, m, 1), h(k,), w(k,)
+    ymin = yref - href / 2.  # (m, m, k)
     xmin = xref - wref / 2.
     ymax = yref + href / 2.
     xmax = xref + wref / 2.
-    vol_anchors = (xmax - xmin) * (ymax - ymin)
+    vol_anchors = (xmax - xmin) * (ymax - ymin)  # 搜索框面积(m, m, k)
 
     # Initialize tensors...
-    shape = (yref.shape[0], yref.shape[1], href.size)
-    feat_labels = tf.zeros(shape, dtype=tf.int64)
+    # 下面各个Tensor矩阵的shape等于中心点坐标矩阵的shape
+    shape = (yref.shape[0], yref.shape[1], href.size)  # (m, m, k)
+    feat_labels = tf.zeros(shape, dtype=tf.int64)  # (m, m, k)
     feat_scores = tf.zeros(shape, dtype=dtype)
 
     feat_ymin = tf.zeros(shape, dtype=dtype)
@@ -64,18 +66,19 @@ def tf_ssd_bboxes_encode_layer(labels,
     def jaccard_with_anchors(bbox):
         """Compute jaccard score between a box and the anchors.
         """
-        int_ymin = tf.maximum(ymin, bbox[0])
+        int_ymin = tf.maximum(ymin, bbox[0])  # (m, m, k)
         int_xmin = tf.maximum(xmin, bbox[1])
         int_ymax = tf.minimum(ymax, bbox[2])
         int_xmax = tf.minimum(xmax, bbox[3])
         h = tf.maximum(int_ymax - int_ymin, 0.)
         w = tf.maximum(int_xmax - int_xmin, 0.)
         # Volumes.
-        inter_vol = h * w
+        # 处理搜索框和bbox之间的联系
+        inter_vol = h * w  # 交集面积
         union_vol = vol_anchors - inter_vol \
-            + (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])
-        jaccard = tf.div(inter_vol, union_vol)
-        return jaccard
+            + (bbox[2] - bbox[0]) * (bbox[3] - bbox[1])  # 并集面积
+        jaccard = tf.div(inter_vol, union_vol)  # 交集/并集，即IOU
+        return jaccard  # (m, m, k)
 
     def intersection_with_anchors(bbox):
         """Compute intersection between score a box and the anchors.
@@ -95,7 +98,7 @@ def tf_ssd_bboxes_encode_layer(labels,
         """Condition: check label index.
         """
         r = tf.less(i, tf.shape(labels))
-        return r[0]
+        return r[0]  # tf.shape(labels)有维度，所以r有维度
 
     def body(i, feat_labels, feat_scores,
              feat_ymin, feat_xmin, feat_ymax, feat_xmax):
@@ -105,54 +108,65 @@ def tf_ssd_bboxes_encode_layer(labels,
           - only update if beat the score of other bboxes.
         """
         # Jaccard score.
-        label = labels[i]
-        bbox = bboxes[i]
-        jaccard = jaccard_with_anchors(bbox)
+        label = labels[i]  # 当前图片上第i个对象的标签
+        bbox = bboxes[i]   # 当前图片上第i个对象的真实框bbox
+        jaccard = jaccard_with_anchors(bbox)  # 当前对象的bbox和当前层的搜索网格IOU，(m, m, k)
         # Mask: check threshold + scores + no annotations + num_classes.
-        mask = tf.greater(jaccard, feat_scores)
+        mask = tf.greater(jaccard, feat_scores)  # 掩码矩阵，IOU大于历史得分的为True，(m, m, k)
         # mask = tf.logical_and(mask, tf.greater(jaccard, matching_threshold))
         mask = tf.logical_and(mask, feat_scores > -0.5)
-        mask = tf.logical_and(mask, label < num_classes)
-        imask = tf.cast(mask, tf.int64)
-        fmask = tf.cast(mask, dtype)
+        mask = tf.logical_and(mask, label < num_classes)  # 不太懂，label应该必定小于类别数
+        imask = tf.cast(mask, tf.int64)  # 整形mask
+        fmask = tf.cast(mask, dtype)     # 浮点型mask
+
         # Update values using mask.
+        # 保证feat_labels存储对应位置得分最大对象标签，feat_scores存储那个得分
+        # (m, m, k) × 当前类别scalar + (1 - (m, m, k)) × (m, m, k)
+        # 更新label记录，此时的imask已经保证了True位置当前对像得分高于之前的对象得分，其他位置值不变
         feat_labels = imask * label + (1 - imask) * feat_labels
+        # 更新score记录，mask为True使用本类别IOU，否则不变
         feat_scores = tf.where(mask, jaccard, feat_scores)
 
+        # 下面四个矩阵存储对应label的真实框坐标
+        # (m, m, k) × 当前框坐标scalar + (1 - (m, m, k)) × (m, m, k)
         feat_ymin = fmask * bbox[0] + (1 - fmask) * feat_ymin
         feat_xmin = fmask * bbox[1] + (1 - fmask) * feat_xmin
         feat_ymax = fmask * bbox[2] + (1 - fmask) * feat_ymax
         feat_xmax = fmask * bbox[3] + (1 - fmask) * feat_xmax
 
-        # Check no annotation label: ignore these anchors...
-        # interscts = intersection_with_anchors(bbox)
-        # mask = tf.logical_and(interscts > ignore_threshold,
-        #                       label == no_annotation_label)
-        # # Replace scores by -1.
-        # feat_scores = tf.where(mask, -tf.cast(mask, dtype), feat_scores)
-
         return [i+1, feat_labels, feat_scores,
                 feat_ymin, feat_xmin, feat_ymax, feat_xmax]
     # Main loop definition.
+    # 对当前图像上每一个目标进行循环
     i = 0
-    [i, feat_labels, feat_scores,
+    (i,
+     feat_labels, feat_scores,
      feat_ymin, feat_xmin,
-     feat_ymax, feat_xmax] = tf.while_loop(condition, body,
-                                           [i, feat_labels, feat_scores,
+     feat_ymax, feat_xmax) = tf.while_loop(condition, body,
+                                           [i,
+                                            feat_labels, feat_scores,
                                             feat_ymin, feat_xmin,
                                             feat_ymax, feat_xmax])
     # Transform to center / size.
+    # 这里的y、x、h、w指的是对应位置所属真实框的相关属性
     feat_cy = (feat_ymax + feat_ymin) / 2.
     feat_cx = (feat_xmax + feat_xmin) / 2.
     feat_h = feat_ymax - feat_ymin
     feat_w = feat_xmax - feat_xmin
+
     # Encode features.
+    # prior_scaling: [0.1, 0.1, 0.2, 0.2]，放缩意义不明
+    # ((m, m, k) - (m, m, 1)) / (k,) * 10
+    # 以搜索网格中心点为参考，真实框中心的偏移，单位长度为网格hw
     feat_cy = (feat_cy - yref) / href / prior_scaling[0]
     feat_cx = (feat_cx - xref) / wref / prior_scaling[1]
+    # log((m, m, k) / (m, m, 1)) * 5
+    # 真实框宽高/搜索网格宽高，取对
     feat_h = tf.log(feat_h / href) / prior_scaling[2]
     feat_w = tf.log(feat_w / wref) / prior_scaling[3]
-    # Use SSD ordering: x / y / w / h instead of ours.
-    feat_localizations = tf.stack([feat_cx, feat_cy, feat_w, feat_h], axis=-1)
+    # Use SSD ordering: x / y / w / h instead of ours.(m, m, k, 4)
+    feat_localizations = tf.stack([feat_cx, feat_cy, feat_w, feat_h], axis=-1)  # -1会扩维
+
     return feat_labels, feat_localizations, feat_scores
 
 
@@ -162,7 +176,7 @@ def tf_ssd_bboxes_encode(labels,
                          num_classes,
                          no_annotation_label,
                          ignore_threshold=0.5,
-                         prior_scaling=[0.1, 0.1, 0.2, 0.2],
+                         prior_scaling=(0.1, 0.1, 0.2, 0.2),
                          dtype=tf.float32,
                          scope='ssd_bboxes_encode'):
     """Encode groundtruth labels and bounding boxes using SSD net anchors.
@@ -183,8 +197,10 @@ def tf_ssd_bboxes_encode(labels,
         target_labels = []
         target_localizations = []
         target_scores = []
+        # anchors_layer: (y, x, h, w)
         for i, anchors_layer in enumerate(anchors):
             with tf.name_scope('bboxes_encode_block_%i' % i):
+                # (m,m,k)，xywh(m,m,4k)，(m,m,k)
                 t_labels, t_loc, t_scores = \
                     tf_ssd_bboxes_encode_layer(labels, bboxes, anchors_layer,
                                                num_classes, no_annotation_label,
@@ -198,7 +214,7 @@ def tf_ssd_bboxes_encode(labels,
 
 def tf_ssd_bboxes_decode_layer(feat_localizations,
                                anchors_layer,
-                               prior_scaling=[0.1, 0.1, 0.2, 0.2]):
+                               prior_scaling=(0.1, 0.1, 0.2, 0.2)):
     """Compute the relative bounding boxes from the layer features and
     reference anchor bounding boxes.
 
@@ -227,7 +243,7 @@ def tf_ssd_bboxes_decode_layer(feat_localizations,
 
 def tf_ssd_bboxes_decode(feat_localizations,
                          anchors,
-                         prior_scaling=[0.1, 0.1, 0.2, 0.2],
+                         prior_scaling=(0.1, 0.1, 0.2, 0.2),
                          scope='ssd_bboxes_decode'):
     """Compute the relative bounding boxes from the SSD net features and
     reference anchors bounding boxes.

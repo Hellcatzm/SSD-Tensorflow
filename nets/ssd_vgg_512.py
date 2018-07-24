@@ -211,10 +211,10 @@ class SSDNet(object):
         """
         return ssd_losses(logits, localisations,
                           gclasses, glocalisations, gscores,
-                          match_threshold=match_threshold,
-                          negative_ratio=negative_ratio,
-                          alpha=alpha,
-                          label_smoothing=label_smoothing,
+                          match_threshold=match_threshold,  # .5
+                          negative_ratio=negative_ratio,  # 3
+                          alpha=alpha,  # 1
+                          label_smoothing=label_smoothing,  # .0
                           scope=scope)
 
 

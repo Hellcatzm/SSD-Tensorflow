@@ -82,6 +82,8 @@ def l2_normalization(
         inputs_shape = inputs.get_shape()
         inputs_rank = inputs_shape.ndims
         dtype = inputs.dtype.base_dtype
+
+        # 在C上做l2标准化
         if data_format == 'NHWC':
             # norm_dim = tf.range(1, inputs_rank-1)
             norm_dim = tf.range(inputs_rank-1, inputs_rank)
@@ -95,8 +97,10 @@ def l2_normalization(
         outputs = nn.l2_normalize(inputs, norm_dim, epsilon=1e-12)
         # Additional scaling.
         if scaling:
+            # 从collections获取变量
             scale_collections = utils.get_variable_collections(
                 variables_collections, 'scale')
+            # 创建变量，shape=C的层数
             scale = variables.model_variable('gamma',
                                              shape=params_shape,
                                              dtype=dtype,
@@ -111,11 +115,12 @@ def l2_normalization(
                 outputs = tf.multiply(outputs, scale)
                 # outputs = tf.transpose(outputs, perm=(0, 2, 3, 1))
 
+        # 为outputs添加别名，并将之收集进collection，返回原节点
         return utils.collect_named_outputs(outputs_collections,
                                            sc.original_name_scope, outputs)
 
 
-@add_arg_scope
+@add_arg_scope  # 层可以被slim.arg_scope设定
 def pad2d(inputs,
           pad=(0, 0),
           mode='CONSTANT',
@@ -129,7 +134,7 @@ def pad2d(inputs,
 
     Args:
       inputs: 4D input Tensor;
-      pad: 2-Tuple with padding values for H and W dimensions;
+      pad: 2-Tuple with padding values for H and W dimensions;（填充的宽度）
       mode: Padding mode. C.f. `tf.pad`
       data_format:  NHWC or NCHW data format.
     """
@@ -143,7 +148,7 @@ def pad2d(inputs,
         return net
 
 
-@add_arg_scope
+@add_arg_scope  # 层可以被slim.arg_scope设定
 def channel_to_last(inputs,
                     data_format='NHWC',
                     scope=None):
