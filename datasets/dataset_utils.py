@@ -98,7 +98,7 @@ def write_label_file(labels_to_class_names, dataset_dir,
             f.write('%d:%s\n' % (label, class_name))
 
 
-def has_labels(dataset_dir, filename=LABELS_FILENAME):
+def has_labels(dataset_dir, filename=LABELS_FILENAME):  # 'labels.txt'
     """Specifies whether or not the dataset directory contains a label map file.
 
     Args:
@@ -125,10 +125,10 @@ def read_label_file(dataset_dir, filename=LABELS_FILENAME):
     with tf.gfile.Open(labels_filename, 'rb') as f:
         lines = f.read()
     lines = lines.split(b'\n')
-    lines = filter(None, lines)
+    lines = filter(None, lines)  # 函数输入None，就是变成了迭代器
 
     labels_to_class_names = {}
     for line in lines:
-        index = line.index(b':')
+        index = line.index(b':')  # label需要'文件名:类别名'格式
         labels_to_class_names[int(line[:index])] = line[index+1:]
     return labels_to_class_names

@@ -55,7 +55,7 @@ SPLITS_TO_SIZES = {
     'train': 17125,
 }
 SPLITS_TO_STATISTICS = {
-    'train': TRAIN_STATISTICS,
+    'train': TRAIN_STATISTICS,  # 训练数据数量
 }
 NUM_CLASSES = 20
 
@@ -78,10 +78,11 @@ def get_split(split_name, dataset_dir, file_pattern=None, reader=None):
         ValueError: if `split_name` is not a valid train/test split.
     """
     if not file_pattern:
-        file_pattern = FILE_PATTERN
+        file_pattern = FILE_PATTERN  # 需要文件命名格式满足：'voc_2012_%s_*.tfrecord'
     return pascalvoc_common.get_split(split_name, dataset_dir,
                                       file_pattern, reader,
-                                      SPLITS_TO_SIZES,
+                                      SPLITS_TO_SIZES,  # {'train': 17125,}
                                       ITEMS_TO_DESCRIPTIONS,
-                                      NUM_CLASSES)
+                                      NUM_CLASSES  # 20
+                                      )
 

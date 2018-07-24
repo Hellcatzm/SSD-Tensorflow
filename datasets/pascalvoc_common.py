@@ -64,6 +64,7 @@ def get_split(split_name, dataset_dir, file_pattern, reader,
     Raises:
         ValueError: if `split_name` is not a valid train/test split.
     """
+    # 'train'
     if split_name not in split_to_sizes:
         raise ValueError('split name %s was not recognized.' % split_name)
     file_pattern = os.path.join(dataset_dir, file_pattern % split_name)
@@ -72,7 +73,7 @@ def get_split(split_name, dataset_dir, file_pattern, reader,
     if reader is None:
         reader = tf.TFRecordReader
     # Features in Pascal VOC TFRecords.
-    keys_to_features = {
+    keys_to_features = {  # 解码TFR文件方式
         'image/encoded': tf.FixedLenFeature((), tf.string, default_value=''),
         'image/format': tf.FixedLenFeature((), tf.string, default_value='jpeg'),
         'image/height': tf.FixedLenFeature([1], tf.int64),
@@ -87,7 +88,7 @@ def get_split(split_name, dataset_dir, file_pattern, reader,
         'image/object/bbox/difficult': tf.VarLenFeature(dtype=tf.int64),
         'image/object/bbox/truncated': tf.VarLenFeature(dtype=tf.int64),
     }
-    items_to_handlers = {
+    items_to_handlers = {  # 解码二进制数据条目
         'image': slim.tfexample_decoder.Image('image/encoded', 'image/format'),
         'shape': slim.tfexample_decoder.Tensor('image/shape'),
         'object/bbox': slim.tfexample_decoder.BoundingBox(
@@ -96,10 +97,12 @@ def get_split(split_name, dataset_dir, file_pattern, reader,
         'object/difficult': slim.tfexample_decoder.Tensor('image/object/bbox/difficult'),
         'object/truncated': slim.tfexample_decoder.Tensor('image/object/bbox/truncated'),
     }
+    # 解码实施
     decoder = slim.tfexample_decoder.TFExampleDecoder(
         keys_to_features, items_to_handlers)
 
     labels_to_names = None
+    # tf.gfile.Exists(os.path.join(dataset_dir, 'labels.txt'))
     if dataset_utils.has_labels(dataset_dir):
         labels_to_names = dataset_utils.read_label_file(dataset_dir)
     # else:
@@ -107,10 +110,18 @@ def get_split(split_name, dataset_dir, file_pattern, reader,
     #     dataset_utils.write_label_file(labels_to_names, dataset_dir)
 
     return slim.dataset.Dataset(
-            data_sources=file_pattern,
-            reader=reader,
-            decoder=decoder,
-            num_samples=split_to_sizes[split_name],
-            items_to_descriptions=items_to_descriptions,
-            num_classes=num_classes,
-            labels_to_names=labels_to_names)
+            data_sources=file_pattern,                    # TFR文件名
+            reader=reader,                                # 阅读器
+            decoder=decoder,                              # 解码Tensor
+            num_samples=split_to_sizes[split_name],       # 数目
+            items_to_descriptions=items_to_descriptions,  # decoder条目描述字段
+            num_classes=num_classes,                      # 类别数
+            labels_to_names=labels_to_names               # 字典{图片:类别,……}
+    )
+
+''' items_to_descriptions:
+    {'image': 'A color image of varying height and width.',
+     'shape': 'Shape of the image',
+     'object/bbox': 'A list of bounding boxes, one per each object.',
+     'object/label': 'A list of labels, one per each object.',}
+'''

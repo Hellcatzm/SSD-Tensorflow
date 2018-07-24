@@ -68,19 +68,16 @@ SAMPLES_PER_FILES = 200
 
 
 def _process_image(directory, name):
-    """Process a image and annotation file.
-
-    Args:
-      filename: string, path to an image file e.g., '/path/to/example.JPG'.
-      coder: instance of ImageCoder to provide TensorFlow image coding utils.
-    Returns:
-      image_buffer: string, JPEG encoding of RGB image.
-      height: integer, image height in pixels.
-      width: integer, image width in pixels.
+    """
+    将图片数据存储为bytes，
+    :param directory: voc文件夹
+    :param name: 图片名
+    :return: 需要写入tfr的数据
     """
     # Read the image file.
+    # DIRECTORY_IMAGES = 'JPEGImages/'
     filename = directory + DIRECTORY_IMAGES + name + '.jpg'
-    image_data = tf.gfile.FastGFile(filename, 'r').read()
+    image_data = tf.gfile.FastGFile(filename, 'rb').read()  # 源码中'rb'错写成'r'
 
     # Read the XML annotation file.
     filename = os.path.join(directory, DIRECTORY_ANNOTATIONS, name + '.xml')
@@ -160,8 +157,8 @@ def _convert_to_example(image_data, labels, labels_text, bboxes, shape,
             'image/object/bbox/label_text': bytes_feature(labels_text),
             'image/object/bbox/difficult': int64_feature(difficult),
             'image/object/bbox/truncated': int64_feature(truncated),
-            'image/format': bytes_feature(image_format),
-            'image/encoded': bytes_feature(image_data)}))
+            'image/format': bytes_feature(image_format),  # 图像编码格式
+            'image/encoded': bytes_feature(image_data)}))  # 二进制图像数据
     return example
 
 
@@ -174,9 +171,9 @@ def _add_to_tfrecord(dataset_dir, name, tfrecord_writer):
       tfrecord_writer: The TFRecord writer to use for writing.
     """
     image_data, shape, bboxes, labels, labels_text, difficult, truncated = \
-        _process_image(dataset_dir, name)
+        _process_image(dataset_dir, name)  # 由文件名读取数据
     example = _convert_to_example(image_data, labels, labels_text,
-                                  bboxes, shape, difficult, truncated)
+                                  bboxes, shape, difficult, truncated)  # 书写tfr
     tfrecord_writer.write(example.SerializeToString())
 
 
@@ -186,7 +183,6 @@ def _get_output_filename(output_dir, name, idx):
 
 def run(dataset_dir, output_dir, name='voc_train', shuffling=False):
     """Runs the conversion operation.
-
     Args:
       dataset_dir: The dataset directory where the dataset is stored.
       output_dir: Output directory.
@@ -195,8 +191,9 @@ def run(dataset_dir, output_dir, name='voc_train', shuffling=False):
         tf.gfile.MakeDirs(dataset_dir)
 
     # Dataset filenames, and shuffling.
+    # './VOC2012/' 'Annotations/'
     path = os.path.join(dataset_dir, DIRECTORY_ANNOTATIONS)
-    filenames = sorted(os.listdir(path))
+    filenames = sorted(os.listdir(path))  # 无路径文件名
     if shuffling:
         random.seed(RANDOM_SEED)
         random.shuffle(filenames)
@@ -204,17 +201,17 @@ def run(dataset_dir, output_dir, name='voc_train', shuffling=False):
     # Process dataset files.
     i = 0
     fidx = 0
-    while i < len(filenames):
+    while i < len(filenames):  # 循环文件名
         # Open new TFRecord file.
-        tf_filename = _get_output_filename(output_dir, name, fidx)
+        tf_filename = _get_output_filename(output_dir, name, fidx)  # 获取输出文件名
         with tf.python_io.TFRecordWriter(tf_filename) as tfrecord_writer:
             j = 0
-            while i < len(filenames) and j < SAMPLES_PER_FILES:
+            while i < len(filenames) and j < SAMPLES_PER_FILES:  # 一个文件200张图
                 sys.stdout.write('\r>> Converting image %d/%d' % (i+1, len(filenames)))
                 sys.stdout.flush()
 
                 filename = filenames[i]
-                img_name = filename[:-4]
+                img_name = filename[:-4]  # 图片名称，去掉字符'.jpg'
                 _add_to_tfrecord(dataset_dir, img_name, tfrecord_writer)
                 i += 1
                 j += 1
