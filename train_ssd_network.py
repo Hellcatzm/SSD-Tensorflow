@@ -15,6 +15,7 @@
 """Generic training script that trains a SSD model using a given dataset."""
 import tensorflow as tf
 from tensorflow.python.ops import control_flow_ops
+import pprint as pp
 
 from datasets import dataset_factory
 from deployment import model_deploy
@@ -130,7 +131,7 @@ tf.app.flags.DEFINE_float(
 # Dataset Flags.
 # =========================================================================== #
 tf.app.flags.DEFINE_string(
-    'dataset_name', 'imagenet', 'The name of the dataset to load.')
+    'dataset_name', 'pascalvoc_2012', 'The name of the dataset to load.')
 tf.app.flags.DEFINE_integer(
     'num_classes', 21, 'Number of classes to use in the dataset.')
 tf.app.flags.DEFINE_string(
@@ -190,8 +191,8 @@ def main(_):
         # Config model_deploy. Keep TF Slim Models structure.
         # Useful if want to need multiple GPUs and/or servers in the future.
         deploy_config = model_deploy.DeploymentConfig(
-            num_clones=FLAGS.num_clones,
-            clone_on_cpu=FLAGS.clone_on_cpu,
+            num_clones=FLAGS.num_clones,  # 1
+            clone_on_cpu=FLAGS.clone_on_cpu,  # False
             replica_id=0,
             num_replicas=1,
             num_ps_tasks=0)
@@ -200,17 +201,20 @@ def main(_):
             global_step = slim.create_global_step()
 
         # Select the dataset.
+        # 'pascalvoc_2012', 'train', tfr文件存储位置
+        # TFR文件命名格式：'voc_2012_%s_*.tfrecord'，%s使用train或者test
         dataset = dataset_factory.get_dataset(
             FLAGS.dataset_name, FLAGS.dataset_split_name, FLAGS.dataset_dir)
 
         # Get the SSD network and its anchors.
-        ssd_class = nets_factory.get_network(FLAGS.model_name)
-        ssd_params = ssd_class.default_params._replace(num_classes=FLAGS.num_classes)
-        ssd_net = ssd_class(ssd_params)
-        ssd_shape = ssd_net.params.img_shape
-        ssd_anchors = ssd_net.anchors(ssd_shape)
+        ssd_class = nets_factory.get_network(FLAGS.model_name)  # 'ssd_300_vgg'
+        ssd_params = ssd_class.default_params._replace(num_classes=FLAGS.num_classes)  # 替换类属性为21
+        ssd_net = ssd_class(ssd_params)  # 创建类实例
+        ssd_shape = ssd_net.params.img_shape  # 获取类属性(300,300)
+        ssd_anchors = ssd_net.anchors(ssd_shape)  # 调用类方法，创建搜素框
 
         # Select the preprocessing function.
+        # 'ssd_300_vgg', 如果 preprocessing_name 是 None 就使用 model_name
         preprocessing_name = FLAGS.preprocessing_name or FLAGS.model_name
         image_preprocessing_fn = preprocessing_factory.get_preprocessing(
             preprocessing_name, is_training=True)
@@ -220,36 +224,47 @@ def main(_):
         # =================================================================== #
         # Create a dataset provider and batches.
         # =================================================================== #
+        # '/job:ps/device:CPU:0' 或者 '/device:CPU:0'
         with tf.device(deploy_config.inputs_device()):
             with tf.name_scope(FLAGS.dataset_name + '_data_provider'):
                 provider = slim.dataset_data_provider.DatasetDataProvider(
-                    dataset,
+                    dataset,  # DatasetDataProvider 需要 slim.dataset.Dataset 做参数
                     num_readers=FLAGS.num_readers,
                     common_queue_capacity=20 * FLAGS.batch_size,
                     common_queue_min=10 * FLAGS.batch_size,
                     shuffle=True)
-            # Get for SSD network: image, labels, bboxes.
+            # Get for SSD network: image, labels, bboxes.c
+            # DatasetDataProvider可以通过TFR字段获取batch size数据
             [image, shape, glabels, gbboxes] = provider.get(['image', 'shape',
                                                              'object/label',
                                                              'object/bbox'])
             # Pre-processing image, labels and bboxes.
+            # 'CHW' (n,) (n, 4)
             image, glabels, gbboxes = \
                 image_preprocessing_fn(image, glabels, gbboxes,
-                                       out_shape=ssd_shape,
-                                       data_format=DATA_FORMAT)
+                                       out_shape=ssd_shape,  # (300,300)
+                                       data_format=DATA_FORMAT)  # 'NCHW'
             # Encode groundtruth labels and bboxes.
+            # f层个(m,m,k)，f层个(m,m,k,4xywh)，f层个(m,m,k) f层表示提取ssd特征的层的数目
+            # 0-20数字,方便loss的坐标记录,IOU值
             gclasses, glocalisations, gscores = \
                 ssd_net.bboxes_encode(glabels, gbboxes, ssd_anchors)
-            batch_shape = [1] + [len(ssd_anchors)] * 3
+            batch_shape = [1] + [len(ssd_anchors)] * 3  # (1,f层,f层,f层)
 
             # Training batches and queue.
-            r = tf.train.batch(
+            r = tf.train.batch(  # 图片，中心点类别，真实框坐标，得分
                 tf_utils.reshape_list([image, gclasses, glocalisations, gscores]),
-                batch_size=FLAGS.batch_size,
+                batch_size=FLAGS.batch_size,  # 32
                 num_threads=FLAGS.num_preprocessing_threads,
                 capacity=5 * FLAGS.batch_size)
+
+            # pp.pprint([image, gclasses, glocalisations, gscores])
+            # pp.pprint(r)
+
             b_image, b_gclasses, b_glocalisations, b_gscores = \
                 tf_utils.reshape_list(r, batch_shape)
+
+            # pp.pprint([b_image, b_gclasses, b_glocalisations, b_gscores])
 
             # Intermediate queueing: unique batch computation pipeline for all
             # GPUs running the training.
@@ -265,21 +280,26 @@ def main(_):
             clones of network_fn."""
             # Dequeue batch.
             b_image, b_gclasses, b_glocalisations, b_gscores = \
-                tf_utils.reshape_list(batch_queue.dequeue(), batch_shape)
+                tf_utils.reshape_list(batch_queue.dequeue(), batch_shape)  # 重整list
 
             # Construct SSD network.
+            # 这个实例方法会返回之前定义的函数ssd_arg_scope（允许修改两个参数）
             arg_scope = ssd_net.arg_scope(weight_decay=FLAGS.weight_decay,
                                           data_format=DATA_FORMAT)
             with slim.arg_scope(arg_scope):
+                # predictions: (BS, H, W, 4, 21)
+                # localisations: (BS, H, W, 4, 4)
+                # logits: (BS, H, W, 4, 21)
                 predictions, localisations, logits, end_points = \
                     ssd_net.net(b_image, is_training=True)
+
             # Add loss function.
             ssd_net.losses(logits, localisations,
                            b_gclasses, b_glocalisations, b_gscores,
-                           match_threshold=FLAGS.match_threshold,
-                           negative_ratio=FLAGS.negative_ratio,
-                           alpha=FLAGS.loss_alpha,
-                           label_smoothing=FLAGS.label_smoothing)
+                           match_threshold=FLAGS.match_threshold,  # .5
+                           negative_ratio=FLAGS.negative_ratio,  # 3
+                           alpha=FLAGS.loss_alpha,  # 1
+                           label_smoothing=FLAGS.label_smoothing)  # .0
             return end_points
 
         # Gather initial summaries.
@@ -388,3 +408,4 @@ def main(_):
 
 if __name__ == '__main__':
     tf.app.run()
+
