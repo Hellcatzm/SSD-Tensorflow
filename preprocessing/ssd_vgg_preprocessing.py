@@ -45,7 +45,7 @@ CROP_RATIO_RANGE = (0.6, 1.67)  # Distortion ratio during cropping.
 EVAL_SIZE = (300, 300)
 
 
-def tf_image_whitened(image, means=[_R_MEAN, _G_MEAN, _B_MEAN]):
+def tf_image_whitened(image, means=(_R_MEAN, _G_MEAN, _B_MEAN)):
     """Subtracts the given means from each image channel.
 
     Returns:
@@ -62,7 +62,7 @@ def tf_image_whitened(image, means=[_R_MEAN, _G_MEAN, _B_MEAN]):
     return image
 
 
-def tf_image_unwhitened(image, means=[_R_MEAN, _G_MEAN, _B_MEAN], to_int=True):
+def tf_image_unwhitened(image, means=(_R_MEAN, _G_MEAN, _B_MEAN), to_int=True):
     """Re-convert to original image distribution, and convert to int if
     necessary.
 
@@ -207,28 +207,43 @@ def distorted_bounding_box_crop(image,
         A tuple, a 3-D Tensor cropped_image and the distorted bbox
     """
     with tf.name_scope(scope, 'distorted_bounding_box_crop', [image, bboxes]):
-        # Each bounding box has shape [1, num_boxes, box coords] and
-        # the coordinates are ordered [ymin, xmin, ymax, xmax].
+        # 高级的随机裁剪
+        # The bounding box coordinates are floats in `[0.0, 1.0]` relative to the width
+        # and height of the underlying image.
+        # 1-D, 1-D, [1, 1, 4]
         bbox_begin, bbox_size, distort_bbox = tf.image.sample_distorted_bounding_box(
                 tf.shape(image),
-                bounding_boxes=tf.expand_dims(bboxes, 0),
+                bounding_boxes=tf.expand_dims(bboxes, 0),  # [1, n, 4]
                 min_object_covered=min_object_covered,
                 aspect_ratio_range=aspect_ratio_range,
                 area_range=area_range,
                 max_attempts=max_attempts,
                 use_image_if_no_bounding_boxes=True)
+        '''
+        Returns:
+            A tuple of `Tensor` objects (begin, size, bboxes).
+
+        begin: A `Tensor`. Has the same type as `image_size`. 1-D, containing `[offset_height, offset_width, 0]`. 
+            Provide as input to `tf.slice`.
+        size: A `Tensor`. Has the same type as `image_size`. 1-D, containing `[target_height, target_width, -1]`. 
+            Provide as input to `tf.slice`.
+        bboxes: A `Tensor` of type `float32`. 3-D with shape `[1, 1, 4]` containing the distorted bounding box.
+            Provide as input to `tf.image.draw_bounding_boxes`.
+        '''
+        # [4]
         distort_bbox = distort_bbox[0, 0]
 
         # Crop the image to the specified bounding box.
         cropped_image = tf.slice(image, bbox_begin, bbox_size)
         # Restore the shape since the dynamic slice loses 3rd dimension.
-        cropped_image.set_shape([None, None, 3])
+        cropped_image.set_shape([None, None, 3])  # <-----设置了尺寸了哈
 
         # Update bounding boxes: resize and filter out.
-        bboxes = tfe.bboxes_resize(distort_bbox, bboxes)
+        bboxes = tfe.bboxes_resize(distort_bbox, bboxes)  # [4], [n, 4]
         labels, bboxes = tfe.bboxes_filter_overlap(labels, bboxes,
-                                                   threshold=BBOX_CROP_OVERLAP,
+                                                   threshold=BBOX_CROP_OVERLAP,  # 0.5
                                                    assign_negative=False)
+        # 返回随机裁剪的图片，筛选调整后的labels(n,)、bboxes(n, 4)，裁剪图片对应原图坐标(4,)
         return cropped_image, labels, bboxes, distort_bbox
 
 
@@ -236,21 +251,6 @@ def preprocess_for_train(image, labels, bboxes,
                          out_shape, data_format='NHWC',
                          scope='ssd_preprocessing_train'):
     """Preprocesses the given image for training.
-
-    Note that the actual resizing scale is sampled from
-        [`resize_size_min`, `resize_size_max`].
-
-    Args:
-        image: A `Tensor` representing an image of arbitrary size.
-        output_height: The height of the image after preprocessing.
-        output_width: The width of the image after preprocessing.
-        resize_side_min: The lower bound for the smallest side of the image for
-            aspect-preserving resizing.
-        resize_side_max: The upper bound for the smallest side of the image for
-            aspect-preserving resizing.
-
-    Returns:
-        A preprocessed image.
     """
     fast_mode = False
     with tf.name_scope(scope, 'ssd_preprocessing_train', [image, labels, bboxes]):
@@ -260,18 +260,14 @@ def preprocess_for_train(image, labels, bboxes,
         if image.dtype != tf.float32:
             image = tf.image.convert_image_dtype(image, dtype=tf.float32)
         tf_summary_image(image, bboxes, 'image_with_bboxes')
+        # 上面保证了图片是3维的tf.float32格式
 
-        # # Remove DontCare labels.
-        # labels, bboxes = ssd_common.tf_bboxes_filter_labels(out_label,
-        #                                                     labels,
-        #                                                     bboxes)
-
-        # Distort image and bounding boxes.
-        dst_image = image
+        # （有条件的）随机裁剪，labels(n,)、bboxes(n, 4)，裁剪图片对应原图坐标(4,)
         dst_image, labels, bboxes, distort_bbox = \
             distorted_bounding_box_crop(image, labels, bboxes,
-                                        min_object_covered=MIN_OBJECT_COVERED,
-                                        aspect_ratio_range=CROP_RATIO_RANGE)
+                                        min_object_covered=MIN_OBJECT_COVERED,  # 0.25
+                                        aspect_ratio_range=CROP_RATIO_RANGE)  # (0.6, 1.67)
+
         # Resize image to output size.
         dst_image = tf_image.resize_image(dst_image, out_shape,
                                           method=tf.image.ResizeMethod.BILINEAR,
@@ -291,9 +287,13 @@ def preprocess_for_train(image, labels, bboxes,
         # Rescale to VGG input scale.
         image = dst_image * 255.
         image = tf_image_whitened(image, [_R_MEAN, _G_MEAN, _B_MEAN])
+        # mean = tf.constant(means, dtype=image.dtype)
+        # image = image - mean
+
         # Image data format.
         if data_format == 'NCHW':
             image = tf.transpose(image, perm=(2, 0, 1))
+        # 'NHWC' (n,) (n, 4)
         return image, labels, bboxes
 
 
@@ -302,12 +302,6 @@ def preprocess_for_eval(image, labels, bboxes,
                         difficults=None, resize=Resize.WARP_RESIZE,
                         scope='ssd_preprocessing_train'):
     """Preprocess an image for evaluation.
-
-    Args:
-        image: A `Tensor` representing an image of arbitrary size.
-        out_shape: Output shape after pre-processing (if resize != None)
-        resize: Resize strategy.
-
     Returns:
         A preprocessed image.
     """
