@@ -152,11 +152,12 @@ def bboxes_resize(bbox_ref, bboxes, name=None):
     # Tensors inputs.
     with tf.name_scope(name, 'bboxes_resize'):
         # Translate.
+        # bbox_ref:['ymin', 'xmin', 'ymax', 'xmax']
         v = tf.stack([bbox_ref[0], bbox_ref[1], bbox_ref[0], bbox_ref[1]])
         bboxes = bboxes - v
         # Scale.
-        s = tf.stack([bbox_ref[2] - bbox_ref[0],
-                      bbox_ref[3] - bbox_ref[1],
+        s = tf.stack([bbox_ref[2] - bbox_ref[0],  # h
+                      bbox_ref[3] - bbox_ref[1],  # w
                       bbox_ref[2] - bbox_ref[0],
                       bbox_ref[3] - bbox_ref[1]])
         bboxes = bboxes / s
@@ -416,14 +417,14 @@ def bboxes_filter_overlap(labels, bboxes,
       labels, bboxes: Filtered (or newly assigned) elements.
     """
     with tf.name_scope(scope, 'bboxes_filter', [labels, bboxes]):
+        # (N,) Tensor：和[0,0,1,1]相交面积大于0的位置返回面积比（相交/原本），小于0的位置返回0
         scores = bboxes_intersection(tf.constant([0, 0, 1, 1], bboxes.dtype),
                                      bboxes)
         mask = scores > threshold
-        if assign_negative:
-            labels = tf.where(mask, labels, -labels)
-            # bboxes = tf.where(mask, bboxes, bboxes)
-        else:
-            labels = tf.boolean_mask(labels, mask)
+        if assign_negative:  # 保留所有的label和框，重叠区不够的label置负
+            labels = tf.where(mask, labels, -labels)  # 交叉满足的标记为正，否则为负
+        else:  # 删除重叠区不够的label和框
+            labels = tf.boolean_mask(labels, mask)  # bool掩码，类似于array的bool切片
             bboxes = tf.boolean_mask(bboxes, mask)
         return labels, bboxes
 
@@ -502,7 +503,12 @@ def bboxes_intersection(bbox_ref, bboxes, name=None):
         h = tf.maximum(int_ymax - int_ymin, 0.)
         w = tf.maximum(int_xmax - int_xmin, 0.)
         # Volumes.
-        inter_vol = h * w
-        bboxes_vol = (bboxes[2] - bboxes[0]) * (bboxes[3] - bboxes[1])
+        inter_vol = h * w  # 各个框在[0,0,1,1]内的面积
+        bboxes_vol = (bboxes[2] - bboxes[0]) * (bboxes[3] - bboxes[1])  # 各个框面积
         scores = tfe_math.safe_divide(inter_vol, bboxes_vol, 'intersection')
+        # from tensorflow.python.ops import math_ops
+        # 大于0的位置返回面积比，小于0的位置返回0
+        # tf.where(math_ops.greater(bboxes_vol, 0),  # 返回bool表是否大于0
+        #          math_ops.divide(inter_vol, bboxes_vol),
+        #          tf.zeros_like(inter_vol), name=name)
         return scores
