@@ -358,7 +358,8 @@ def main(_):
         # Variables to train.
         variables_to_train = tf_utils.get_variables_to_train(FLAGS)
 
-        # and returns a train_tensor and summary_op
+        # and returns a train_tensor and summary_op#
+        # total_loss 并不参与优化，仅记录用
         total_loss, clones_gradients = model_deploy.optimize_clones(
             clones,
             optimizer,
@@ -395,14 +396,14 @@ def main(_):
             logdir=FLAGS.train_dir,
             master='',
             is_chief=True,
-            init_fn=tf_utils.get_init_fn(FLAGS),
-            summary_op=summary_op,
-            number_of_steps=FLAGS.max_number_of_steps,
-            log_every_n_steps=FLAGS.log_every_n_steps,
-            save_summaries_secs=FLAGS.save_summaries_secs,
-            saver=saver,
+            init_fn=tf_utils.get_init_fn(FLAGS),            # 看函数实现就明白了
+            summary_op=summary_op,                          # tf.summary.merge节点
+            number_of_steps=FLAGS.max_number_of_steps,      # 训练step
+            log_every_n_steps=FLAGS.log_every_n_steps,      # 每次model保存step间隔
+            save_summaries_secs=FLAGS.save_summaries_secs,  # 每次summary时间间隔
+            saver=saver,                                    # tf.train.Saver节点
             save_interval_secs=FLAGS.save_interval_secs,
-            session_config=config,
+            session_config=config,                          # sess参数
             sync_optimizer=None)
 
 
