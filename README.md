@@ -9,7 +9,7 @@
 [『TensorFlow』SSD源码学习_其六：标注格式整理](https://www.cnblogs.com/hellcat/p/9355609.html)<br>
 [『TensorFlow』SSD源码学习_其七：损失函数](https://www.cnblogs.com/hellcat/p/9351802.html)<br>
 [『TensorFlow』SSD源码学习_其八：网络训练](https://www.cnblogs.com/hellcat/p/9360640.html)<br>
-个人复现的SSD:<br>
+个人复现的SSD，相比本项目简化了代码结构:<br>
 [SSD_Realization_TensorFlow](https://github.com/Hellcatzm/SSD_Realization_TensorFlow)<br>
 [SSD_Realization_MXNet](https://github.com/Hellcatzm/SSD_Realization_MXNet)<br>
 还有Mask_RCNN的注释版：<br>
